@@ -1048,7 +1048,7 @@ export default function Home() {
           <div className="grid md:grid-cols-4 gap-8 mb-8">
             <div>
               <div className="flex items-center gap-2 mb-4">
-                <img src="/BOB_character.png" alt="PrimeCast" className="h-10" />
+                <img src="/logo.png" alt="PrimeCast" className="h-10" />
                 <span className="text-xl font-bold text-white">PrimeCast</span>
               </div>
               <p className="text-white/50 text-sm">
