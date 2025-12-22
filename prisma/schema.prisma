@@ -1,0 +1,28 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  email           String   @unique
+  password        String
+  name            String?
+  country         String?
+  whatsapp        String?
+  trialStartDate  DateTime @default(now())
+  trialDays       Int      @default(1)
+  isSubscribed    Boolean  @default(false)
+  subscriptionEnd DateTime?
+  isSuspended     Boolean  @default(false)
+  suspendReason   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
