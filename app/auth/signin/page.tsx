@@ -43,7 +43,7 @@ export default function SignIn() {
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 shadow-2xl border border-white/20">
           <div className="text-center mb-8">
             <Link href="/" className="inline-block mb-4">
-              <img src="/BOB_character.png" alt="PrimeCast" className="h-16 mx-auto" />
+              <img src="/logo.png" alt="PrimeCast" className="h-16 mx-auto" />
             </Link>
             <h1 className="text-3xl font-bold text-white mb-2">Welcome Back</h1>
             <p className="text-gray-300">Sign in to continue watching</p>

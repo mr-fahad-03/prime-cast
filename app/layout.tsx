@@ -58,7 +58,7 @@ export const metadata: Metadata = {
       "Discover thousands of live TV channels from 200+ countries. Watch news, sports, entertainment, movies, and more.",
     images: [
       {
-        url: "/BOB_character.png",
+        url: "/logo.png",
         width: 1200,
         height: 630,
         alt: "PrimeCast - Live TV Streaming",
@@ -70,7 +70,7 @@ export const metadata: Metadata = {
     title: "PrimeCast - Watch Live TV Channels Worldwide",
     description:
       "Discover thousands of live TV channels from 200+ countries. Start your free trial today!",
-    images: ["/BOB_character.png"],
+    images: ["/logo.png"],
   },
   verification: {
     google: "your-google-verification-code",

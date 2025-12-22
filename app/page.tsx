@@ -302,7 +302,7 @@ export default function Home() {
               </button>
             )}
             <Link href="/" className="text-base sm:text-2xl font-bold text-white flex items-center gap-1.5 sm:gap-2 hover:opacity-90 transition-opacity">
-              <img src="/BOB_character.png" alt="PrimeCast" className="h-8 sm:h-10" />
+              <img src="/logo.png" alt="PrimeCast" className="h-8 sm:h-10" />
               <span>PrimeCast</span>
             </Link>
           </div>
