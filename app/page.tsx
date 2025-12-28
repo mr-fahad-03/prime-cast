@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Hls from "hls.js";
-import { useSession, signOut } from "next-auth/react";
 
 // Types based on API documentation
 interface Country {
@@ -48,19 +47,9 @@ interface Logo {
   url: string;
 }
 
-type ViewState = "home" | "countries" | "channels" | "player" | "trial-expired" | "suspended";
-
-// Check if user's trial has expired
-const isTrialExpired = (trialStartDate: string, trialDays: number = 1): boolean => {
-  const trialStart = new Date(trialStartDate);
-  const now = new Date();
-  const diffInMs = now.getTime() - trialStart.getTime();
-  const diffInHours = diffInMs / (1000 * 60 * 60);
-  return diffInHours >= trialDays * 24;
-};
+type ViewState = "home" | "countries" | "channels" | "player";
 
 export default function Home() {
-  const { data: session, status } = useSession();
   const [view, setView] = useState<ViewState>("home");
   const [countries, setCountries] = useState<Country[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -74,43 +63,9 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-
-  // Check trial status before allowing watch
-  const canWatch = (): boolean => {
-    if (!session) return false;
-    if (session.user.isSuspended) return false;
-    if (session.user.isSubscribed) {
-      // Check if subscription has expired
-      if (session.user.subscriptionEnd) {
-        const endDate = new Date(session.user.subscriptionEnd);
-        if (new Date() > endDate) return false;
-      }
-      return true;
-    }
-    return !isTrialExpired(session.user.trialStartDate, session.user.trialDays);
-  };
 
   // Fetch countries
   const fetchCountries = async () => {
-    // Check if user can watch
-    if (!session) {
-      // Redirect to sign in
-      window.location.href = "/auth/signin";
-      return;
-    }
-
-    // Check if suspended
-    if (session.user.isSuspended) {
-      setView("suspended");
-      return;
-    }
-    
-    if (!canWatch()) {
-      setView("trial-expired");
-      return;
-    }
-
     setLoading(true);
     setError(null);
     try {
@@ -258,7 +213,7 @@ export default function Home() {
   const goBack = () => {
     setSearchTerm("");
     setError(null);
-    if (view === "countries" || view === "trial-expired" || view === "suspended") {
+    if (view === "countries") {
       setView("home");
     } else if (view === "channels") {
       setView("countries");
@@ -331,80 +286,7 @@ export default function Home() {
               <Link href="/" className="text-white font-semibold">Home</Link>
               <Link href="/about" className="text-white/70 hover:text-white transition-colors">About</Link>
               <Link href="/contact" className="text-white/70 hover:text-white transition-colors">Contact</Link>
-              <Link href="/pricing" className="text-white/70 hover:text-white transition-colors">Pricing</Link>
             </nav>
-            {/* Auth Buttons */}
-            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              {status === "loading" ? (
-                <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
-              ) : session ? (
-                <div className="relative">
-                  <button
-                    onClick={() => setUserMenuOpen(!userMenuOpen)}
-                    className="flex items-center gap-2 bg-white/10 hover:bg-white/20 px-3 py-2 rounded-lg transition-colors"
-                  >
-                    <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                      {session.user?.name?.charAt(0) || session.user?.email?.charAt(0) || "U"}
-                    </div>
-                    <span className="hidden sm:block text-white text-sm max-w-[100px] truncate">
-                      {session.user?.name || session.user?.email?.split("@")[0]}
-                    </span>
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-                  {userMenuOpen && (
-                    <div className="absolute right-0 mt-2 w-48 bg-gray-900 border border-white/10 rounded-lg shadow-xl py-2 z-50">
-                      <div className="px-4 py-2 border-b border-white/10">
-                        <p className="text-white text-sm font-medium truncate">{session.user?.email}</p>
-                        <p className="text-xs text-gray-400 mt-1">
-                          {session.user.isSuspended ? (
-                            <span className="text-red-400">Account Suspended</span>
-                          ) : session.user.isSubscribed ? (
-                            <span className="text-green-400">✓ Subscribed</span>
-                          ) : isTrialExpired(session.user.trialStartDate, session.user.trialDays) ? (
-                            <span className="text-red-400">Trial Expired</span>
-                          ) : (
-                            <span className="text-yellow-400">Free Trial Active</span>
-                          )}
-                        </p>
-                      </div>
-                      <Link
-                        href="/pricing"
-                        className="block px-4 py-2 text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-                        onClick={() => setUserMenuOpen(false)}
-                      >
-                        Pricing Plans
-                      </Link>
-                      <button
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          signOut();
-                        }}
-                        className="w-full text-left px-4 py-2 text-red-400 hover:text-red-300 hover:bg-white/10 transition-colors"
-                      >
-                        Sign Out
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <Link
-                    href="/auth/signin"
-                    className="text-white/80 hover:text-white px-3 py-2 text-sm font-medium transition-colors"
-                  >
-                    Sign In
-                  </Link>
-                  <Link
-                    href="/auth/signup"
-                    className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                  >
-                    Sign Up
-                  </Link>
-                </>
-              )}
-            </div>
           </div>
         </div>
       </header>
@@ -435,50 +317,6 @@ export default function Home() {
         {/* Home View */}
         {!loading && view === "home" && (
           <div className="space-y-24">
-            {/* Promotional Banner */}
-            <div className="relative overflow-hidden">
-              <div className="absolute inset-0 bg-gradient-to-r from-yellow-500/20 via-orange-500/20 to-red-500/20 animate-pulse"></div>
-              <div className="relative bg-gradient-to-r from-yellow-600 via-orange-500 to-red-500 rounded-2xl p-1">
-                <div className="bg-gray-900/95 backdrop-blur-sm rounded-xl px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="flex-shrink-0 w-16 h-16 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center animate-bounce">
-                      <span className="text-3xl">🎁</span>
-                    </div>
-                    <div className="text-center md:text-left">
-                      <div className="flex items-center gap-2 justify-center md:justify-start">
-                        <span className="px-2 py-0.5 bg-red-500 text-white text-xs font-bold rounded animate-pulse">LIMITED OFFER</span>
-                      </div>
-                      <h3 className="text-xl md:text-2xl font-bold text-white mt-1">
-                        Get <span className="text-yellow-400">1 Day FREE Trial</span> - No Credit Card Required!
-                      </h3>
-                      <p className="text-white/70 text-sm mt-1">
-                        Sign up now and enjoy unlimited access to 10,000+ TV channels absolutely FREE for 24 hours!
-                      </p>
-                    </div>
-                  </div>
-                  {!session && (
-                    <Link
-                      href="/auth/signup"
-                      className="flex-shrink-0 px-8 py-3 bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-400 hover:to-orange-400 text-black font-bold rounded-xl shadow-lg shadow-orange-500/30 hover:shadow-orange-500/50 transition-all duration-300 hover:scale-105 flex items-center gap-2"
-                    >
-                      <span>Claim Free Trial</span>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                      </svg>
-                    </Link>
-                  )}
-                  {session && !session.user.isSubscribed && !session.user.isSuspended && !isTrialExpired(session.user.trialStartDate, session.user.trialDays) && (
-                    <div className="flex-shrink-0 px-6 py-3 bg-green-500/20 border border-green-500/50 text-green-400 font-semibold rounded-xl flex items-center gap-2">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      Trial Active
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
             {/* Hero Section */}
             <section className="flex flex-col items-center justify-center min-h-[80vh] text-center relative">
               {/* Animated background elements */}
@@ -531,7 +369,7 @@ export default function Home() {
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
-                    1-Day Free Trial
+                    100% Free
                   </div>
                   <div className="flex items-center gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -555,7 +393,7 @@ export default function Home() {
                 { number: "200+", label: "Countries", icon: "🌍" },
                 { number: "10K+", label: "TV Channels", icon: "📺" },
                 { number: "24/7", label: "Live Streaming", icon: "🔴" },
-                { number: "1 Day", label: "Free Trial", icon: "🎁" },
+                { number: "Free", label: "Forever", icon: "🎁" },
               ].map((stat, index) => (
                 <div key={index} className="p-6 bg-white/5 backdrop-blur-sm rounded-2xl border border-white/10 text-center hover:bg-white/10 transition-colors">
                   <div className="text-4xl mb-3">{stat.icon}</div>
@@ -576,9 +414,9 @@ export default function Home() {
                   { icon: "🌐", title: "Global Coverage", description: "Access TV channels from over 200 countries worldwide. Watch international news, sports, and entertainment from anywhere." },
                   { icon: "⚡", title: "Instant Streaming", description: "No buffering, no waiting. Our optimized streaming technology delivers smooth playback on any device." },
                   { icon: "📱", title: "Any Device", description: "Watch on your computer, tablet, or phone. Our responsive design works perfectly on all screen sizes." },
-                  { icon: "🔒", title: "Safe & Secure", description: "We prioritize your privacy and security. Your account data is protected with industry-standard encryption." },
+                  { icon: "🔒", title: "Safe & Secure", description: "We prioritize your privacy and security. No registration required to start watching." },
                   { icon: "🎯", title: "Easy to Use", description: "Simple and intuitive interface. Find and watch your favorite channels in just a few clicks." },
-                  { icon: "🎁", title: "Free Trial", description: "Try before you subscribe! Get a full 1-day free trial with access to all channels - no credit card required." },
+                  { icon: "🎁", title: "Completely Free", description: "100% free access to all channels. No hidden fees, no subscriptions, no credit card required." },
                 ].map((feature, index) => (
                   <div key={index} className="p-8 bg-gradient-to-br from-white/5 to-white/0 rounded-2xl border border-white/10 hover:border-purple-500/50 transition-all duration-300 group hover:-translate-y-1">
                     <div className="text-5xl mb-5 group-hover:scale-110 transition-transform">{feature.icon}</div>
@@ -665,11 +503,11 @@ export default function Home() {
               </div>
               <div className="max-w-3xl mx-auto space-y-4">
                 {[
-                  { q: "How does the free trial work?", a: "Sign up for a free account and get instant access to all 10,000+ TV channels for 1 full day. No credit card required!" },
-                  { q: "What happens after the trial?", a: "After your 1-day trial ends, simply contact us on WhatsApp to choose a subscription plan that works for you." },
+                  { q: "Is PrimeCast really free?", a: "Yes! PrimeCast is 100% free to use. No registration, no subscription, no hidden fees. Just click and start watching." },
                   { q: "What devices can I use?", a: "PrimeCast works on any device with a modern web browser - computers, laptops, tablets, and smartphones. No app download needed." },
+                  { q: "How many channels are available?", a: "We provide access to over 10,000 TV channels from 200+ countries worldwide, including news, sports, entertainment, and more." },
                   { q: "Why are some channels not working?", a: "Some streams may occasionally be temporarily unavailable. If a channel isn't working, try an alternative stream or check back later." },
-                  { q: "How do I subscribe after the trial?", a: "Contact us on WhatsApp through the pricing page and we'll help you choose the best plan for your needs." },
+                  { q: "Do I need to create an account?", a: "No! You can start watching immediately without any registration or login required." },
                 ].map((faq, index) => (
                   <details key={index} className="group p-6 bg-white/5 rounded-xl border border-white/10 cursor-pointer">
                     <summary className="flex items-center justify-between text-white font-semibold text-lg list-none">
@@ -688,106 +526,15 @@ export default function Home() {
             <section className="py-12 text-center">
               <div className="p-12 bg-gradient-to-r from-purple-600/20 to-pink-600/20 rounded-3xl border border-purple-500/30 backdrop-blur-sm">
                 <h3 className="text-3xl md:text-4xl font-bold text-white mb-4">Ready to Start Watching?</h3>
-                <p className="text-white/70 text-lg mb-8 max-w-2xl mx-auto">Sign up now and get 1 full day of free access to 10,000+ channels. No credit card required!</p>
-                {session ? (
-                  <button
-                    onClick={fetchCountries}
-                    className="px-12 py-5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl text-white text-xl font-bold shadow-2xl shadow-purple-500/25 hover:shadow-purple-500/40 transition-all duration-300 hover:scale-105"
-                  >
-                    🚀 Start Watching Now
-                  </button>
-                ) : (
-                  <Link
-                    href="/auth/signup"
-                    className="inline-block px-12 py-5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl text-white text-xl font-bold shadow-2xl shadow-purple-500/25 hover:shadow-purple-500/40 transition-all duration-300 hover:scale-105"
-                  >
-                    🎁 Start Free Trial
-                  </Link>
-                )}
+                <p className="text-white/70 text-lg mb-8 max-w-2xl mx-auto">Jump in and explore 10,000+ channels from around the world. No signup required!</p>
+                <button
+                  onClick={fetchCountries}
+                  className="px-12 py-5 bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl text-white text-xl font-bold shadow-2xl shadow-purple-500/25 hover:shadow-purple-500/40 transition-all duration-300 hover:scale-105"
+                >
+                  🚀 Start Watching Now
+                </button>
               </div>
             </section>
-          </div>
-        )}
-
-        {/* Trial Expired View */}
-        {!loading && view === "trial-expired" && (
-          <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-            <div className="max-w-lg mx-auto p-8 bg-white/10 backdrop-blur-lg rounded-2xl border border-white/20">
-              <div className="text-6xl mb-6">⏰</div>
-              <h2 className="text-3xl font-bold text-white mb-4">
-                Your Free Trial Has Ended
-              </h2>
-              <p className="text-white/70 mb-6 leading-relaxed">
-                Your 1-day free trial has expired. To continue enjoying unlimited access to 10,000+ TV channels from around the world, please subscribe to one of our plans.
-              </p>
-              <div className="space-y-4">
-                <Link
-                  href="/pricing"
-                  className="block w-full py-4 px-6 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold rounded-xl shadow-lg transition-all"
-                >
-                  View Pricing Plans
-                </Link>
-                <a
-                  href={`https://wa.me/1234567890?text=${encodeURIComponent("Hi! My trial has expired. I want to subscribe to continue watching TV channels.")}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 w-full py-4 px-6 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl shadow-lg transition-all"
-                >
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                  </svg>
-                  Contact on WhatsApp
-                </a>
-              </div>
-              <button
-                onClick={goBack}
-                className="mt-6 text-white/60 hover:text-white transition-colors"
-              >
-                ← Back to Home
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Suspended View */}
-        {!loading && view === "suspended" && (
-          <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-            <div className="max-w-lg mx-auto p-8 bg-red-500/10 backdrop-blur-lg rounded-2xl border border-red-500/30">
-              <div className="text-6xl mb-6">🚫</div>
-              <h2 className="text-3xl font-bold text-white mb-4">
-                Account Suspended
-              </h2>
-              <p className="text-white/70 mb-4 leading-relaxed">
-                Your account has been suspended and you cannot access the streaming service at this time.
-              </p>
-              {session?.user.suspendReason && (
-                <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-4 mb-6">
-                  <p className="text-red-300 text-sm">
-                    <span className="font-semibold">Reason:</span> {session.user.suspendReason}
-                  </p>
-                </div>
-              )}
-              <p className="text-white/50 text-sm mb-6">
-                If you believe this is a mistake, please contact our support team.
-              </p>
-              <a
-                href={`https://wa.me/1234567890?text=${encodeURIComponent("Hi! My account has been suspended. I need help with my account.")}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-2 w-full py-4 px-6 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl shadow-lg transition-all"
-              >
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                </svg>
-                Contact Support on WhatsApp
-              </a>
-              <button
-                onClick={() => signOut()}
-                className="mt-6 text-white/60 hover:text-white transition-colors"
-              >
-                Sign Out
-              </button>
-            </div>
           </div>
         )}
 
