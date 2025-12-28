@@ -41,3 +41,9 @@ yarn-error.log*
 next-env.d.ts
 
 /app/generated/prisma
+
+# Flutter build artifacts
+*.apk
+*.aab
+flutterapp/release/
+flutterapp/build/
