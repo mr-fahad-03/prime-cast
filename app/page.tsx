@@ -61,8 +61,15 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [streamLoading, setStreamLoading] = useState(false);
+  const [currentStreamIndex, setCurrentStreamIndex] = useState(0);
+  const [checkingStreams, setCheckingStreams] = useState(false);
+  const [checkProgress, setCheckProgress] = useState({ checked: 0, total: 0, online: 0 });
+  const [onlineChannelIds, setOnlineChannelIds] = useState<Set<string>>(new Set());
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const retryCountRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Fetch countries
   const fetchCountries = async () => {
@@ -80,10 +87,50 @@ export default function Home() {
     }
   };
 
+  // Check if a stream URL is accessible
+  const checkStreamOnline = async (url: string, signal: AbortSignal): Promise<boolean> => {
+    try {
+      const response = await fetch(url, {
+        method: 'HEAD',
+        mode: 'no-cors',
+        signal,
+      });
+      // With no-cors, we can't read status but if fetch succeeds, stream is likely online
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Check multiple streams for a channel and return if at least one is online
+  const checkChannelOnline = async (
+    channelId: string,
+    streamsData: Stream[],
+    signal: AbortSignal
+  ): Promise<boolean> => {
+    const channelStreams = streamsData.filter((s) => s.channel === channelId);
+    
+    // Check streams in parallel, return true if any is online
+    const results = await Promise.all(
+      channelStreams.slice(0, 3).map((stream) => // Check first 3 streams max
+        checkStreamOnline(stream.url, signal).catch(() => false)
+      )
+    );
+    
+    return results.some((isOnline) => isOnline);
+  };
+
   // Fetch all data needed for channels view
   const fetchChannelsData = async (countryCode: string) => {
     setLoading(true);
     setError(null);
+    setOnlineChannelIds(new Set());
+    
+    // Abort any previous stream checking
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
     try {
       const [channelsRes, streamsRes, logosRes] = await Promise.all([
         fetch("https://iptv-org.github.io/api/channels.json"),
@@ -113,11 +160,55 @@ export default function Home() {
       setChannels(availableChannels.sort((a, b) => a.name.localeCompare(b.name)));
       setStreams(streamsData);
       setLogos(logosData);
+      setLoading(false);
       setView("channels");
+      
+      // Start checking streams in background
+      setCheckingStreams(true);
+      setCheckProgress({ checked: 0, total: availableChannels.length, online: 0 });
+      
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+      
+      const onlineIds = new Set<string>();
+      const batchSize = 5; // Check 5 channels at a time
+      
+      for (let i = 0; i < availableChannels.length; i += batchSize) {
+        if (abortController.signal.aborted) break;
+        
+        const batch = availableChannels.slice(i, i + batchSize);
+        
+        const results = await Promise.all(
+          batch.map(async (channel) => {
+            const isOnline = await checkChannelOnline(
+              channel.id,
+              streamsData,
+              abortController.signal
+            );
+            return { id: channel.id, isOnline };
+          })
+        );
+        
+        results.forEach(({ id, isOnline }) => {
+          if (isOnline) {
+            onlineIds.add(id);
+          }
+        });
+        
+        // Update progress and online channels
+        setOnlineChannelIds(new Set(onlineIds));
+        setCheckProgress({
+          checked: Math.min(i + batchSize, availableChannels.length),
+          total: availableChannels.length,
+          online: onlineIds.size,
+        });
+      }
+      
+      setCheckingStreams(false);
     } catch {
       setError("Failed to load channels. Please try again.");
-    } finally {
       setLoading(false);
+      setCheckingStreams(false);
     }
   };
 
@@ -144,8 +235,29 @@ export default function Home() {
     const channelStreams = getChannelStreams(channel.id);
     if (channelStreams.length > 0) {
       setSelectedChannel(channel);
+      setCurrentStreamIndex(0);
+      retryCountRef.current = 0;
       setSelectedStream(channelStreams[0]);
+      setStreamLoading(true);
       setView("player");
+    }
+  };
+
+  // Try next available stream when current one fails
+  const tryNextStream = () => {
+    if (!selectedChannel) return;
+    
+    const channelStreams = getChannelStreams(selectedChannel.id);
+    const nextIndex = currentStreamIndex + 1;
+    
+    if (nextIndex < channelStreams.length) {
+      setCurrentStreamIndex(nextIndex);
+      setSelectedStream(channelStreams[nextIndex]);
+      setError(null);
+      retryCountRef.current = 0;
+    } else {
+      setError("All streams failed. Try another channel.");
+      setStreamLoading(false);
     }
   };
 
@@ -153,6 +265,8 @@ export default function Home() {
   useEffect(() => {
     if (view === "player" && selectedStream && videoRef.current) {
       const video = videoRef.current;
+      setStreamLoading(true);
+      setError(null);
 
       // Cleanup previous HLS instance
       if (hlsRef.current) {
@@ -160,31 +274,106 @@ export default function Home() {
         hlsRef.current = null;
       }
 
+      // Set a timeout for stream loading (important for Android)
+      const loadTimeout = setTimeout(() => {
+        if (streamLoading) {
+          console.log("Stream load timeout, trying next...");
+          tryNextStream();
+        }
+      }, 15000);
+
       if (Hls.isSupported()) {
         const hls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: true,
+          enableWorker: false, // Disable worker for better Android compatibility
+          lowLatencyMode: false,
+          fragLoadingMaxRetry: 3,
+          manifestLoadingMaxRetry: 2,
+          levelLoadingMaxRetry: 2,
+          manifestLoadingTimeOut: 10000,
+          fragLoadingTimeOut: 20000,
+          levelLoadingTimeOut: 10000,
+          startLevel: -1,
+          capLevelToPlayerSize: true,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          xhrSetup: (xhr) => {
+            // Some streams need specific headers
+            xhr.withCredentials = false;
+          },
         });
         hlsRef.current = hls;
+        
         hls.loadSource(selectedStream.url);
         hls.attachMedia(video);
+        
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          clearTimeout(loadTimeout);
+          setStreamLoading(false);
           video.play().catch(() => {
-            // Autoplay might be blocked
+            // Autoplay might be blocked on mobile - this is ok
           });
         });
+        
+        hls.on(Hls.Events.FRAG_LOADED, () => {
+          setStreamLoading(false);
+        });
+        
         hls.on(Hls.Events.ERROR, (_, data) => {
+          console.log("HLS Error:", data.type, data.details);
           if (data.fatal) {
-            setError("Failed to load stream. Try another channel.");
+            clearTimeout(loadTimeout);
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                if (retryCountRef.current < 2) {
+                  retryCountRef.current++;
+                  hls.startLoad();
+                } else {
+                  tryNextStream();
+                }
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                tryNextStream();
+                break;
+            }
           }
         });
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        // Safari native HLS support
+        // Native HLS support (Safari/iOS)
         video.src = selectedStream.url;
-        video.addEventListener("loadedmetadata", () => {
+        
+        const handleCanPlay = () => {
+          clearTimeout(loadTimeout);
+          setStreamLoading(false);
           video.play().catch(() => {});
-        });
+        };
+        
+        const handleError = () => {
+          clearTimeout(loadTimeout);
+          tryNextStream();
+        };
+        
+        video.addEventListener("canplay", handleCanPlay);
+        video.addEventListener("error", handleError);
+        video.load();
+        
+        return () => {
+          clearTimeout(loadTimeout);
+          video.removeEventListener("canplay", handleCanPlay);
+          video.removeEventListener("error", handleError);
+        };
+      } else {
+        // Fallback for browsers without HLS support
+        clearTimeout(loadTimeout);
+        setStreamLoading(false);
+        setError("Your browser doesn't support HLS streaming. Try using Chrome or Firefox.");
       }
+
+      return () => {
+        clearTimeout(loadTimeout);
+      };
     }
 
     return () => {
@@ -209,15 +398,26 @@ export default function Home() {
       c.alt_names.some((n) => n.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
+  // Stop stream checking
+  const stopStreamChecking = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setCheckingStreams(false);
+  };
+
   // Go back handler
   const goBack = () => {
     setSearchTerm("");
     setError(null);
+    stopStreamChecking();
     if (view === "countries") {
       setView("home");
     } else if (view === "channels") {
       setView("countries");
       setSelectedCountry(null);
+      setOnlineChannelIds(new Set());
     } else if (view === "player") {
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -600,9 +800,37 @@ export default function Home() {
               )}
               {selectedCountry?.name} Channels
             </h2>
-            <p className="text-white/60 mb-6">
-              {channels.length} channels available
-            </p>
+            
+            {/* Stream Checking Progress */}
+            {checkingStreams ? (
+              <div className="mb-6">
+                <div className="flex items-center flex-wrap gap-3 text-white/80 mb-2">
+                  <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                  <span>Checking streams... {checkProgress.checked}/{checkProgress.total}</span>
+                  <span className="text-green-400">({checkProgress.online} online)</span>
+                  <button
+                    onClick={stopStreamChecking}
+                    className="ml-2 px-3 py-1 text-xs bg-white/10 hover:bg-white/20 rounded-full text-white/70 hover:text-white transition-colors"
+                  >
+                    Skip checking
+                  </button>
+                </div>
+                <div className="w-full max-w-md h-2 bg-white/10 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300"
+                    style={{ width: `${(checkProgress.checked / checkProgress.total) * 100}%` }}
+                  ></div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-white/60 mb-6">
+                {onlineChannelIds.size > 0 
+                  ? `${onlineChannelIds.size} online channels (${channels.length - onlineChannelIds.size} offline hidden)`
+                  : `${channels.length} channels available`
+                }
+              </p>
+            )}
+            
             {/* Search */}
             <div className="mb-6">
               <input
@@ -615,17 +843,35 @@ export default function Home() {
             </div>
             {/* Channels Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {filteredChannels.map((channel) => {
+              {filteredChannels
+                .filter((channel) => {
+                  // While checking, show all channels
+                  // After checking, only show online channels
+                  if (checkingStreams || onlineChannelIds.size === 0) {
+                    return true;
+                  }
+                  return onlineChannelIds.has(channel.id);
+                })
+                .map((channel) => {
                 const logo = getChannelLogo(channel.id);
                 const streamCount = getChannelStreams(channel.id).length;
+                const isOnline = onlineChannelIds.has(channel.id);
+                const isChecked = !checkingStreams || onlineChannelIds.size === 0 || checkProgress.checked > 0;
+                
                 return (
                   <button
                     key={channel.id}
                     onClick={() => handleChannelSelect(channel)}
-                    className="p-4 bg-white/5 hover:bg-white/15 border border-white/10 rounded-xl transition-all duration-200 hover:scale-[1.02] hover:border-purple-500/50 text-left"
+                    className={`p-4 bg-white/5 hover:bg-white/15 border border-white/10 rounded-xl transition-all duration-200 hover:scale-[1.02] hover:border-purple-500/50 text-left ${
+                      checkingStreams && !isOnline ? 'opacity-60' : ''
+                    }`}
                   >
                     <div className="flex items-center gap-4">
-                      <div className="w-16 h-16 bg-white/10 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0">
+                      <div className="w-16 h-16 bg-white/10 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0 relative">
+                        {/* Online indicator */}
+                        {isChecked && isOnline && (
+                          <div className="absolute top-1 right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-gray-900 z-10"></div>
+                        )}
                         {logo ? (
                           <img
                             src={logo}
@@ -657,8 +903,8 @@ export default function Home() {
                               {cat}
                             </span>
                           ))}
-                          <span className="text-xs text-white/40">
-                            {streamCount} stream{streamCount !== 1 ? "s" : ""}
+                          <span className={`text-xs ${isOnline ? 'text-green-400' : 'text-white/40'}`}>
+                            {isOnline ? '● Online' : `${streamCount} stream${streamCount !== 1 ? "s" : ""}`}
                           </span>
                         </div>
                       </div>
@@ -667,12 +913,12 @@ export default function Home() {
                 );
               })}
             </div>
-            {filteredChannels.length === 0 && (
+            {filteredChannels.filter((ch) => checkingStreams || onlineChannelIds.size === 0 || onlineChannelIds.has(ch.id)).length === 0 && (
               <div className="text-center py-10">
                 <p className="text-white/60">
                   {searchTerm
-                    ? `No channels found matching "${searchTerm}"`
-                    : "No channels with available streams found for this country"}
+                    ? `No online channels found matching "${searchTerm}"`
+                    : "No online channels found for this country"}
                 </p>
                 <button
                   onClick={goBack}
@@ -697,12 +943,26 @@ export default function Home() {
 
             {/* Video Player */}
             <div className="relative bg-black rounded-2xl overflow-hidden shadow-2xl">
+              {/* Loading Overlay */}
+              {streamLoading && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10">
+                  <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                  <p className="mt-4 text-white/80 text-sm">Loading stream...</p>
+                  <p className="mt-1 text-white/50 text-xs">
+                    Stream {currentStreamIndex + 1} of {getChannelStreams(selectedChannel.id).length}
+                  </p>
+                </div>
+              )}
               <video
                 ref={videoRef}
                 className="w-full aspect-video"
                 controls
                 autoPlay
                 playsInline
+                muted={false}
+                webkit-playsinline="true"
+                x-webkit-airplay="allow"
+                preload="metadata"
               />
             </div>
 
@@ -717,18 +977,25 @@ export default function Home() {
             {getChannelStreams(selectedChannel.id).length > 1 && (
               <div className="mt-8">
                 <h3 className="text-xl font-semibold text-white mb-4">
-                  Alternative Streams
+                  Alternative Streams ({getChannelStreams(selectedChannel.id).length} available)
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   {getChannelStreams(selectedChannel.id).map((stream, index) => (
                     <button
                       key={index}
-                      onClick={() => setSelectedStream(stream)}
+                      onClick={() => {
+                        setCurrentStreamIndex(index);
+                        retryCountRef.current = 0;
+                        setStreamLoading(true);
+                        setError(null);
+                        setSelectedStream(stream);
+                      }}
+                      disabled={streamLoading}
                       className={`p-3 rounded-lg text-left transition-all ${
                         selectedStream.url === stream.url
                           ? "bg-purple-600 text-white"
                           : "bg-white/5 hover:bg-white/15 text-white/80"
-                      }`}
+                      } ${streamLoading ? "opacity-50 cursor-not-allowed" : ""}`}
                     >
                       <div className="font-medium truncate text-sm">
                         {stream.title || `Stream ${index + 1}`}
